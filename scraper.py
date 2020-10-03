@@ -1,7 +1,7 @@
 import json
-
+import os
 import boto3
-import base64
+from botocore.exceptions import ClientError, NoCredentialsError
 
 from selenium import webdriver
 from webdriver_manager.chrome import ChromeDriverManager
@@ -10,11 +10,31 @@ from course import Course
 from course_info import CourseInfo
 from instructor import Instructor
 
+
+os.environ['AWS_PROFILE'] = 'huskyapi'
+os.environ['AWS_DEFAULT_REGION'] = 'us-west-2'
+
+UW_NETID="/scraper/uw_login/netid"
+UW_PASSWORD="/scraper/uw_login/password"
+
+ssm_client = boto3.client('ssm', region_name='us-west-2')
+parameters = []
+try:
+    response = ssm_client.get_parameters(
+        Names=(UW_NETID, UW_PASSWORD),
+        WithDecryption=True
+    )
+except NoCredentialsError as e:
+    print(f"Error finding credentials: {e}")
+except ClientError as e:
+    print(f"Client error: {e}")
+
+for param in response['Parameters']:
+    parameters.append(param['Value'])
+
+
 driver = webdriver.Chrome(ChromeDriverManager().install())
 driver.get("https://sdb.admin.uw.edu/timeschd/uwnetid/sln.asp?QTRYR=AUT+2020&SLN=13418")
-
-NETID = ""
-PASSWORD = ""
 
 max_tables = 4
 table_type = {
@@ -26,9 +46,9 @@ table_type = {
 
 # Login to the UW Time Schedule
 netid_input = driver.find_element_by_id("weblogin_netid")
-netid_input.send_keys(NETID)
+netid_input.send_keys(parameters[0])
 password_input = driver.find_element_by_id("weblogin_password")
-password_input.send_keys(PASSWORD)
+password_input.send_keys(parameters[1])
 submit_button = driver.find_element_by_id("submit_button")
 submit_button.click()
 
@@ -36,7 +56,6 @@ submit_button.click()
 soup = BeautifulSoup(driver.page_source, 'html.parser')
 tables = [p.find('table') for p in soup.find_all('p')]
 
-# Parse and build structured course objects
 # Parse and build structured course objects
 course = Course()
 course_info = CourseInfo()
@@ -86,7 +105,6 @@ for i, table in enumerate(tables[:max_tables]):
         elif i == table_type['NOTES']:
             course_info.description = "".join([line for line in cells])
         break
-
 
 print(json.dumps(course.__dict__))
 print(json.dumps(course_info.__dict__))
