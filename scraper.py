@@ -28,6 +28,10 @@ table_type = {
 
 
 def get_parameters(parameter_names: Tuple[str]) -> List[str]:
+    """
+    :param parameter_names: AWS Parameter Store paths
+    :return: List of parameter values
+    """
     ssm_client = boto3.client('ssm', region_name='us-west-2')
     parameters = []
     try:
@@ -45,7 +49,7 @@ def get_parameters(parameter_names: Tuple[str]) -> List[str]:
     return parameters
 
 
-def create_course_objects(tables) -> Tuple[Course, CourseInfo, Instructor]:
+def create_course_objects(tables: List[BeautifulSoup]) -> Tuple[Course, CourseInfo, Instructor]:
     course = Course()
     course_info = CourseInfo()
     instructor = Instructor()
@@ -53,43 +57,58 @@ def create_course_objects(tables) -> Tuple[Course, CourseInfo, Instructor]:
         for row in table.findAll('tr'):
             if row.has_attr('bgcolor'):
                 continue
-            cells = [cell.get_text() for cell in row.findAll('td')]
+            cells = [cell.get_text().strip() for cell in row.findAll('td')]
             if i == table_type['GENERAL_INFO']:
                 course_info.sln = cells[0]
-                course.name, course.number = cells[1].split()
+                course.department, course.number = cells[1].split()
                 course_info.section = cells[2]
                 course_info.type = cells[3]
 
                 # TODO: Add way to handle fractional credits (i.e, 2.5)
-                credit_tokens = cells[4].strip().split('-')
-                if len(credit_tokens) > 1:
-                    course_info.lower_credits = credit_tokens[0]
-                    course_info.upper_credits = credit_tokens[1]
-                else:
-                    course_info.lower_credits = credit_tokens[0]
-                    course_info.upper_credits = credit_tokens[0]
+                if len(cells) > 7:
+                    credit_tokens = cells[5].strip().split('-')
+                    if len(credit_tokens) > 1:
+                        course_info.lower_credits = credit_tokens[0]
+                        course_info.upper_credits = credit_tokens[1]
+                    else:
+                        course_info.lower_credits = credit_tokens[0]
+                        course_info.upper_credits = credit_tokens[0]
 
-                course.name = cells[4]
-                course_info.gen_ed_marker = cells[5]
+                    course.name = cells[6]
+                    course_info.gen_ed_marker = cells[7]
+                else:
+                    credit_tokens = cells[4].strip().split('-')
+                    if len(credit_tokens) > 1:
+                        course_info.lower_credits = credit_tokens[0]
+                        course_info.upper_credits = credit_tokens[1]
+                    else:
+                        course_info.lower_credits = credit_tokens[0]
+                        course_info.upper_credits = credit_tokens[0]
+
+                    course.name = cells[5]
+                    course_info.gen_ed_marker = cells[6]
 
             elif i == table_type['ENROLLMENT']:
-                course.current_size = cells[0]
-                course.max_size = cells[1]
+                course_info.current_size = cells[0]
+                course_info.max_size = cells[1]
+                if len(cells) > 4 and cells[4] == 'Entry Code required':
+                    course_info.add_code_required = True
 
             elif i == table_type['MEETINGS']:
-                course.meeting_days = cells[0]
-                course.start_time, course.end_time = cells[1].split('-')
-                course.room = cells[2]
-                instructor_tokens = cells[3].split(',')
+                if cells[0] != 'To be arranged':
+                    course_info.meeting_days = cells[0]
+                    course_info.start_time, course_info.end_time = cells[1].split('-')
+                    course_info.room = cells[2]
+                    instructor_tokens = cells[3].split(',')
 
-                if len(instructor_tokens) > 1:
-                    instructor.first_name = instructor_tokens[0]
-                    instructor.last_name = instructor_tokens[1]
+                    if len(instructor_tokens) > 1:
+                        instructor.first_name = instructor_tokens[0]
+                        instructor.last_name = instructor_tokens[1]
 
-                # TODO: Add API call to get email address.
-                # TODO: Add way to handle names with middle names.
-                instructor.middle_name = ""
-                instructor.email = ""
+                    # TODO: Add API call to get email address.
+                    # TODO: Add way to handle names with middle names.
+                    instructor.middle_name = ""
+                    instructor.email = ""
 
             elif i == table_type['NOTES']:
                 course_info.description = "".join([line for line in cells])
@@ -97,9 +116,21 @@ def create_course_objects(tables) -> Tuple[Course, CourseInfo, Instructor]:
     return course, course_info, instructor
 
 
+def create_time_schedule_url(quarter: str, year: str, sln: str) -> str:
+    """
+    :param quarter:
+    :param year:
+    :param sln:
+    :return: URL for UW Time Schedule.
+            Example: "https://sdb.admin.uw.edu/timeschd/uwnetid/sln.asp?QTRYR=AUT+2020&SLN=13418"
+    """
+    base_url = "https://sdb.admin.uw.edu/timeschd/uwnetid/sln.asp?"
+    return f"{base_url}QTRYR={quarter}+{year}&SLN={sln}"
+
+
 def main():
     driver = webdriver.Chrome(ChromeDriverManager().install())
-    driver.get("https://sdb.admin.uw.edu/timeschd/uwnetid/sln.asp?QTRYR=AUT+2020&SLN=13418")
+    driver.get("https://sdb.admin.uw.edu/timeschd/uwnetid/sln.asp?QTRYR=SUM+2019&SLN=11056")
 
     # Get UW NetID login credentials
     netid, password = get_parameters((UW_NETID, UW_PASSWORD))
