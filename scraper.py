@@ -1,16 +1,28 @@
 import json
 import os
+import logging
 from typing import List, Tuple
 
 import boto3
 from botocore.exceptions import ClientError, NoCredentialsError
 
 from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
 from bs4 import BeautifulSoup
 from course import Course
 from course_info import CourseInfo
 from instructor import Instructor
+from cache import get_data
+
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+logging.basicConfig(
+    format='%(asctime)s,%(msecs)d %(levelname)-8s '
+           '[%(filename)s:%(lineno)d] %(message)s',
+    datefmt='%Y-%m-%d:%H:%M:%S',
+    level=logging.INFO)
+
+log = logging.getLogger(__name__)
 
 os.environ['AWS_PROFILE'] = 'huskyapi'
 os.environ['AWS_DEFAULT_REGION'] = 'us-west-2'
@@ -32,6 +44,7 @@ def get_parameters(parameter_names: Tuple[str]) -> List[str]:
     :param parameter_names: AWS Parameter Store paths
     :return: List of parameter values
     """
+    log.info("getting UW NetID credentials")
     ssm_client = boto3.client('ssm', region_name='us-west-2')
     parameters = []
     try:
@@ -46,6 +59,7 @@ def get_parameters(parameter_names: Tuple[str]) -> List[str]:
 
     for param in response['Parameters']:
         parameters.append(param['Value'])
+    log.info("done finding UW NetID credentials")
     return parameters
 
 
@@ -59,6 +73,7 @@ def create_course_objects(tables: List[BeautifulSoup]) -> Tuple[Course, CourseIn
                 continue
             cells = [cell.get_text().strip() for cell in row.findAll('td')]
             if i == table_type['GENERAL_INFO']:
+                log.info("parsing through course info")
                 course_info.sln = cells[0]
                 course.department, course.number = cells[1].split()
                 course_info.section = cells[2]
@@ -89,30 +104,56 @@ def create_course_objects(tables: List[BeautifulSoup]) -> Tuple[Course, CourseIn
                     course_info.gen_ed_marker = cells[6]
 
             elif i == table_type['ENROLLMENT']:
+                log.info("parsing through course info (enrollment)")
+
                 course_info.current_size = cells[0]
                 course_info.max_size = cells[1]
                 if len(cells) > 4 and cells[4] == 'Entry Code required':
                     course_info.add_code_required = True
 
             elif i == table_type['MEETINGS']:
+                log.info("parsing through meeting times")
                 if cells[0] != 'To be arranged':
                     course_info.meeting_days = cells[0]
                     course_info.start_time, course_info.end_time = cells[1].split('-')
                     course_info.room = cells[2]
-                    instructor_tokens = cells[3].split(',')
 
+                    log.info(f"meeting days: {course_info.meeting_days}")
+                    log.info(f"start and end times: {course_info.start_time}, {course_info.end_time}")
+                    log.info(f"room: {course_info.room}")
+
+                    instructor_name = cells[3]
+                    log.info(f"instructor name: {instructor_name}")
+                    instructor_tokens = instructor_name.split(',')
                     if len(instructor_tokens) > 1:
-                        instructor.first_name = instructor_tokens[0]
-                        instructor.last_name = instructor_tokens[1]
+                        instructor.first_name = instructor_tokens[1]
+                        instructor.last_name = instructor_tokens[0]
+                    log.info(f"split instructor name: {instructor_tokens}")
+                    first_name_tokens = instructor.first_name.split(' ')
+                    log.info(f"first name: {first_name_tokens}")
+
+                    if len(first_name_tokens) > 1:
+                        instructor.first_name = first_name_tokens[0]
+                        instructor.middle_name = first_name_tokens[1]
+                    else:
+                        instructor.middle_name = ""
+                    log.info(f"{instructor.first_name}, {instructor.middle_name}, {instructor.last_name}")
+                    log.info("retrieving data for instructor email and phone number")
+
+                    data = get_data(instructor.first_name, instructor.last_name)
 
                     # TODO: Add API call to get email address.
                     # TODO: Add way to handle names with middle names.
-                    instructor.middle_name = ""
-                    instructor.email = ""
+                    if data and not data.get('error'):
+                        instructor.email = data['teacher'][0]['email']
+                        instructor.phone_number = data['teacher'][0]['phone']
+
 
             elif i == table_type['NOTES']:
+                log.info("Retrieving course description...")
                 course_info.description = "".join([line for line in cells])
             break
+    log.info("Done collecting course information and instructor information.")
     return course, course_info, instructor
 
 
@@ -128,9 +169,18 @@ def create_time_schedule_url(quarter: str, year: str, sln: str) -> str:
     return f"{base_url}QTRYR={quarter}+{year}&SLN={sln}"
 
 
-def main():
-    driver = webdriver.Chrome(ChromeDriverManager().install())
-    driver.get("https://sdb.admin.uw.edu/timeschd/uwnetid/sln.asp?QTRYR=SUM+2019&SLN=11056")
+def get_course(url):
+    log.info(f"starting up Chrome for {url}")
+
+    options = Options()
+    options.add_argument("--headless")  # Runs Chrome in headless mode.
+    options.add_argument('--no-sandbox')  # # Bypass OS security model
+    options.add_argument('start-maximized')
+    options.add_argument('disable-infobars')
+    options.add_argument("--disable-extensions")
+    driver = webdriver.Chrome(ChromeDriverManager().install(), options=options)
+
+    driver.get(url)
 
     # Get UW NetID login credentials
     netid, password = get_parameters((UW_NETID, UW_PASSWORD))
@@ -149,9 +199,19 @@ def main():
 
     # Parse and build structured course objects
     course, course_info, instructor = create_course_objects(tables)
-    print(json.dumps(course.__dict__))
-    print(json.dumps(course_info.__dict__))
-    print(json.dumps(instructor.__dict__))
+    course.course_info = course_info.__dict__
+    course.instructor = instructor.__dict__
+    print(json.dumps(course.__dict__), end="")
+    driver.quit()
+
+def main():
+    log.info("starting course sln scraper")
+    with open('course_sln.json') as f:
+        lines = f.readlines()
+        for line in lines:
+            course_sln = json.loads(line)
+            log.info(f"processing {course_sln}")
+            get_course(course_sln['url'])
 
 
 if __name__ == '__main__':
