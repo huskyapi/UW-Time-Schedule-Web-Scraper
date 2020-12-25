@@ -1,8 +1,10 @@
 import json
 import sys
 import logging
-import httpx
+import requests
 import redis
+
+from utils import retry
 
 # host = os.environ.get("REDIS_HOST"),
 # port = os.environ.get("REDIS_PORT"),
@@ -29,18 +31,18 @@ def redis_connect():
 client = redis_connect()
 
 
+@retry(Exception, tries=5, logger=log)
 def get_data_from_api(first_name, last_name):
     log.info(f"getting data from api for {first_name}, {last_name}")
-    with httpx.Client() as http_client:
-        base_url = "http://www.uwfaculty-lmao.tk/faculty/api/v1/"
-        if not last_name:
-            url = f"{base_url}{first_name}"
-        else:
-            url = f"{base_url}{first_name}%20{last_name}"
+    base_url = "http://www.uwfaculty-lmao.tk/faculty/api/v1/"
+    if not last_name:
+        url = f"{base_url}{first_name}"
+    else:
+        url = f"{base_url}{first_name}%20{last_name}"
 
-        log.info(f"getting API response from {url}")
-        response = http_client.get(url)
-        return response.json()
+    log.info(f"getting API response from {url}")
+    response = requests.get(url)
+    return response.json()
 
 
 def get_data_from_cache(key: str):

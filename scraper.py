@@ -1,6 +1,7 @@
 import json
 import os
 import logging
+from utils import retry
 from typing import List, Tuple
 
 import boto3
@@ -169,7 +170,9 @@ def create_time_schedule_url(quarter: str, year: str, sln: str) -> str:
     return f"{base_url}QTRYR={quarter}+{year}&SLN={sln}"
 
 
-def get_course(url):
+@retry(Exception, tries=5, logger=log)
+def get_course(course_sln, netid, password):
+    url = course_sln['url']
     log.info(f"starting up Chrome for {url}")
 
     options = Options()
@@ -181,9 +184,6 @@ def get_course(url):
     driver = webdriver.Chrome(ChromeDriverManager().install(), options=options)
 
     driver.get(url)
-
-    # Get UW NetID login credentials
-    netid, password = get_parameters((UW_NETID, UW_PASSWORD))
 
     # Login to the UW Time Schedule
     netid_input = driver.find_element_by_id("weblogin_netid")
@@ -199,19 +199,25 @@ def get_course(url):
 
     # Parse and build structured course objects
     course, course_info, instructor = create_course_objects(tables)
+    course_info.quarter = course_sln['quarter']
+    course_info.year = course_sln['year']
     course.course_info = course_info.__dict__
     course.instructor = instructor.__dict__
     print(json.dumps(course.__dict__), end="")
     driver.quit()
 
+
 def main():
+    # Get UW NetID login credentials
+    netid, password = get_parameters((UW_NETID, UW_PASSWORD))
+
     log.info("starting course sln scraper")
     with open('course_sln.json') as f:
         lines = f.readlines()
         for line in lines:
             course_sln = json.loads(line)
             log.info(f"processing {course_sln}")
-            get_course(course_sln['url'])
+            get_course(course_sln, netid, password)
 
 
 if __name__ == '__main__':
