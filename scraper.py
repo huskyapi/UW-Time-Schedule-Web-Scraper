@@ -69,6 +69,7 @@ def create_course_objects(tables: List[BeautifulSoup]) -> Tuple[Course, CourseIn
     course_info = CourseInfo()
     instructor = Instructor()
     for i, table in enumerate(tables[:max_tables]):
+        log.info(table)
         for row in table.findAll('tr'):
             log.info(row)
             if row.has_attr('bgcolor'):
@@ -161,7 +162,7 @@ def create_course_objects(tables: List[BeautifulSoup]) -> Tuple[Course, CourseIn
 
             elif i == table_type['NOTES']:
                 log.info("Retrieving course description...")
-                course_info.description = "".join([line[0] if line else "" for line in cells])
+                course_info.description = "\n".join([line[0] if line else "" for line in cells])
             break
     log.info("Done collecting course information and instructor information.")
     return course, course_info, instructor
@@ -197,27 +198,11 @@ def create_time_schedule_url(quarter: str, year: str, sln: str) -> str:
 
 
 @retry(Exception, tries=5, logger=log)
-def get_course(course_sln, netid, password):
+def get_course(course_sln, driver):
     url = course_sln['url']
     log.info(f"starting up Chrome for {url}")
 
-    options = Options()
-    options.add_argument("--headless")  # Runs Chrome in headless mode.
-    options.add_argument('--no-sandbox')  # # Bypass OS security model
-    options.add_argument('start-maximized')
-    options.add_argument('disable-infobars')
-    options.add_argument("--disable-extensions")
-    driver = webdriver.Chrome(ChromeDriverManager().install(), options=options)
-
     driver.get(url)
-
-    # Login to the UW Time Schedule
-    netid_input = driver.find_element_by_id("weblogin_netid")
-    netid_input.send_keys(netid)
-    password_input = driver.find_element_by_id("weblogin_password")
-    password_input.send_keys(password)
-    submit_button = driver.find_element_by_id("submit_button")
-    submit_button.click()
 
     # Use BeautifulSoup to scrap the time schedule
     soup = BeautifulSoup(driver.page_source, 'html.parser')
@@ -229,26 +214,41 @@ def get_course(course_sln, netid, password):
     course_info.year = course_sln['year']
     course.course_info = course_info.__dict__
     course.instructor = instructor.__dict__
-    print(json.dumps(course.__dict__), end="")
-    driver.quit()
+    print(json.dumps(course.__dict__))
 
 
 def main():
     # Get UW NetID login credentials
     netid, password = get_parameters((UW_NETID, UW_PASSWORD))
+    options = Options()
+    # options.add_argument("--headless")  # Runs Chrome in headless mode.
+    options.add_argument('--no-sandbox')  # # Bypass OS security model
+    options.add_argument('start-maximized')
+    options.add_argument('disable-infobars')
+    options.add_argument("--disable-extensions")
+    options.add_argument("user-data-dir=/tmp/web-scraper") # Save credential login
+    options.add_argument('--profile-directory=Default')
+    driver = webdriver.Chrome(ChromeDriverManager().install(), options=options)
+
+    driver.get("https://my.uw.edu/")
+
+    # Login to the UW Time Schedule
+    netid_input = driver.find_element_by_id("weblogin_netid")
+    netid_input.send_keys(netid)
+    password_input = driver.find_element_by_id("weblogin_password")
+    password_input.send_keys(password)
+    submit_button = driver.find_element_by_id("submit_button")
+    submit_button.click()
+
 
     log.info("starting course sln scraper")
-    get_course({'url': 'https://sdb.admin.uw.edu/timeschd/uwnetid/sln.asp?QTRYR=AUT+2006&SLN=12011',
-                'quarter': 'AUT', 'year': '2007'}, netid, password)
-    get_course({'url': 'https://sdb.admin.uw.edu/timeschd/uwnetid/sln.asp?QTRYR=AUT+2007&SLN=18677',
-                'quarter': 'AUT', 'year': '2007'}, netid, password)
-    # with open('course_sln.json') as f:
-    #     lines = f.readlines()
-    #     for line in lines:
-    #         course_sln = json.loads(line)
-    #         log.info(f"processing {course_sln}")
-    #         get_course(course_sln, netid, password)
-
+    with open('course_sln.json') as f:
+        lines = f.readlines()
+        for line in lines:
+            course_sln = json.loads(line)
+            log.info(f"processing {course_sln}")
+            get_course(course_sln, driver)
+    driver.quit()
 
 if __name__ == '__main__':
     main()
