@@ -79,14 +79,14 @@ def create_course_objects(tables: List[BeautifulSoup]) -> Tuple[Course, CourseIn
             log.info(cells)
             if i == table_type['GENERAL_INFO']:
                 log.info("parsing through course info")
-                course_info.sln = cells[0][0]
-                course.department, course.number = cells[1][0].split()
-                course_info.section = cells[2][0]
-                course_info.type = cells[3][0]
+                course_info.sln = cells[0][0] if cells[0] else ""
+                course.department, course.number = cells[1][0].split() if cells[1] else "", ""
+                course_info.section = cells[2][0] if cells[2] else ""
+                course_info.type = cells[3][0] if cells[3] else ""
 
                 # TODO: Add way to handle fractional credits (i.e, 2.5)
                 if len(cells) > 7:
-                    credit_tokens = cells[5][0].strip().split('-')
+                    credit_tokens = cells[5][0].strip().split('-') if cells[5] else []
                     if len(credit_tokens) > 1:
                         course_info.lower_credits = credit_tokens[0]
                         course_info.upper_credits = credit_tokens[1]
@@ -97,7 +97,7 @@ def create_course_objects(tables: List[BeautifulSoup]) -> Tuple[Course, CourseIn
                     course.name = cells[6][0]
                     course_info.gen_ed_marker = cells[7]
                 else:
-                    credit_tokens = cells[4][0].strip().split('-')
+                    credit_tokens = cells[4][0].strip().split('-') if cells[4] else []
                     if len(credit_tokens) > 1:
                         course_info.lower_credits = credit_tokens[0]
                         course_info.upper_credits = credit_tokens[1]
@@ -105,14 +105,14 @@ def create_course_objects(tables: List[BeautifulSoup]) -> Tuple[Course, CourseIn
                         course_info.lower_credits = credit_tokens[0]
                         course_info.upper_credits = credit_tokens[0]
 
-                    course.name = cells[5][0]
-                    course_info.gen_ed_marker = cells[6][0]
+                    course.name = cells[5][0] if cells[5] else ""
+                    course_info.gen_ed_marker = cells[6][0] if cells[6] else ""
 
             elif i == table_type['ENROLLMENT']:
                 log.info("parsing through course info (enrollment)")
 
-                course_info.current_size = cells[0][0]
-                course_info.max_size = cells[1][0]
+                course_info.current_size = cells[0][0] if cells[0] else ""
+                course_info.max_size = cells[1][0] if cells[1] else ""
                 if len(cells) > 4 and cells[4][0] == 'Entry Code required':
                     course_info.add_code_required = True
 
@@ -122,7 +122,7 @@ def create_course_objects(tables: List[BeautifulSoup]) -> Tuple[Course, CourseIn
                 # If there is more than one meeting location:
                 # Ex: TTh   08:45-09:45     UW1 121	GUNNERSON,KIM N.
                 #     TTh   09:45-10:50	    UW2 131 GUNNERSON,KIM N.
-                if cells[0][0] != 'To be arranged':
+                if cells[0] and cells[0][0] != 'To be arranged':
                     course_info.meeting_days = cells[0]
 
                     course_info.start_time = [time.split('-')[0] for time in cells[1]]
@@ -133,7 +133,7 @@ def create_course_objects(tables: List[BeautifulSoup]) -> Tuple[Course, CourseIn
                     log.info(f"start and end times: {course_info.start_time}, {course_info.end_time}")
                     log.info(f"room: {course_info.room}")
 
-                    instructor_name = cells[3][0]
+                    instructor_name = cells[3][0] if cells[3] else ""
                     log.info(f"instructor name: {instructor_name}")
                     instructor_tokens = instructor_name.split(',')
                     if len(instructor_tokens) > 1:
@@ -159,10 +159,9 @@ def create_course_objects(tables: List[BeautifulSoup]) -> Tuple[Course, CourseIn
                         instructor.email = data['teacher'][0]['email']
                         instructor.phone_number = data['teacher'][0]['phone']
 
-
             elif i == table_type['NOTES']:
                 log.info("Retrieving course description...")
-                course_info.description = "".join([line[0] for line in cells])
+                course_info.description = "".join([line[0] if line else "" for line in cells])
             break
     log.info("Done collecting course information and instructor information.")
     return course, course_info, instructor
@@ -239,8 +238,8 @@ def main():
     netid, password = get_parameters((UW_NETID, UW_PASSWORD))
 
     log.info("starting course sln scraper")
-    # get_course({'url': 'https://sdb.admin.uw.edu/timeschd/uwnetid/sln.asp?QTRYR=AUT+2006&SLN=12011',
-    #             'quarter': 'AUT', 'year': '2007'}, netid, password)
+    get_course({'url': 'https://sdb.admin.uw.edu/timeschd/uwnetid/sln.asp?QTRYR=AUT+2006&SLN=12011',
+                'quarter': 'AUT', 'year': '2007'}, netid, password)
     get_course({'url': 'https://sdb.admin.uw.edu/timeschd/uwnetid/sln.asp?QTRYR=AUT+2007&SLN=18677',
                 'quarter': 'AUT', 'year': '2007'}, netid, password)
     # with open('course_sln.json') as f:
