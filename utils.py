@@ -1,6 +1,6 @@
 import time
 import functools
-
+import traceback
 
 def retry(ExceptionToCheck, tries=4, delay=3, backoff=2, logger=None):
     def deco_retry(f):
@@ -13,6 +13,8 @@ def retry(ExceptionToCheck, tries=4, delay=3, backoff=2, logger=None):
                     return f(*args, **kwargs)
                 except ExceptionToCheck as e:
                     msg = f"%s, Retrying in %d seconds..." % (str(e), mdelay)
+                    if mtries == tries:
+                        logger.error(traceback.format_exc())
                     if logger:
                         logger.warning(msg)
                     else:

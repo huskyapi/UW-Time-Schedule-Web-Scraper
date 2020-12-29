@@ -70,19 +70,23 @@ def create_course_objects(tables: List[BeautifulSoup]) -> Tuple[Course, CourseIn
     instructor = Instructor()
     for i, table in enumerate(tables[:max_tables]):
         for row in table.findAll('tr'):
+            log.info(row)
             if row.has_attr('bgcolor'):
                 continue
-            cells = [cell.get_text().strip() for cell in row.findAll('td')]
+            data = [data for data in row.findAll('td')]
+            cells = [list(cell.stripped_strings) for cell in data]
+
+            log.info(cells)
             if i == table_type['GENERAL_INFO']:
                 log.info("parsing through course info")
-                course_info.sln = cells[0]
-                course.department, course.number = cells[1].split()
-                course_info.section = cells[2]
-                course_info.type = cells[3]
+                course_info.sln = cells[0][0]
+                course.department, course.number = cells[1][0].split()
+                course_info.section = cells[2][0]
+                course_info.type = cells[3][0]
 
                 # TODO: Add way to handle fractional credits (i.e, 2.5)
                 if len(cells) > 7:
-                    credit_tokens = cells[5].strip().split('-')
+                    credit_tokens = cells[5][0].strip().split('-')
                     if len(credit_tokens) > 1:
                         course_info.lower_credits = credit_tokens[0]
                         course_info.upper_credits = credit_tokens[1]
@@ -90,10 +94,10 @@ def create_course_objects(tables: List[BeautifulSoup]) -> Tuple[Course, CourseIn
                         course_info.lower_credits = credit_tokens[0]
                         course_info.upper_credits = credit_tokens[0]
 
-                    course.name = cells[6]
+                    course.name = cells[6][0]
                     course_info.gen_ed_marker = cells[7]
                 else:
-                    credit_tokens = cells[4].strip().split('-')
+                    credit_tokens = cells[4][0].strip().split('-')
                     if len(credit_tokens) > 1:
                         course_info.lower_credits = credit_tokens[0]
                         course_info.upper_credits = credit_tokens[1]
@@ -101,29 +105,35 @@ def create_course_objects(tables: List[BeautifulSoup]) -> Tuple[Course, CourseIn
                         course_info.lower_credits = credit_tokens[0]
                         course_info.upper_credits = credit_tokens[0]
 
-                    course.name = cells[5]
-                    course_info.gen_ed_marker = cells[6]
+                    course.name = cells[5][0]
+                    course_info.gen_ed_marker = cells[6][0]
 
             elif i == table_type['ENROLLMENT']:
                 log.info("parsing through course info (enrollment)")
 
-                course_info.current_size = cells[0]
-                course_info.max_size = cells[1]
-                if len(cells) > 4 and cells[4] == 'Entry Code required':
+                course_info.current_size = cells[0][0]
+                course_info.max_size = cells[1][0]
+                if len(cells) > 4 and cells[4][0] == 'Entry Code required':
                     course_info.add_code_required = True
 
             elif i == table_type['MEETINGS']:
                 log.info("parsing through meeting times")
-                if cells[0] != 'To be arranged':
+                log.info(cells)
+                # If there is more than one meeting location:
+                # Ex: TTh   08:45-09:45     UW1 121	GUNNERSON,KIM N.
+                #     TTh   09:45-10:50	    UW2 131 GUNNERSON,KIM N.
+                if cells[0][0] != 'To be arranged':
                     course_info.meeting_days = cells[0]
-                    course_info.start_time, course_info.end_time = cells[1].split('-')
+
+                    course_info.start_time = [time.split('-')[0] for time in cells[1]]
+                    course_info.end_time = [time.split('-')[1] for time in cells[1]]
                     course_info.room = cells[2]
 
                     log.info(f"meeting days: {course_info.meeting_days}")
                     log.info(f"start and end times: {course_info.start_time}, {course_info.end_time}")
                     log.info(f"room: {course_info.room}")
 
-                    instructor_name = cells[3]
+                    instructor_name = cells[3][0]
                     log.info(f"instructor name: {instructor_name}")
                     instructor_tokens = instructor_name.split(',')
                     if len(instructor_tokens) > 1:
@@ -152,10 +162,27 @@ def create_course_objects(tables: List[BeautifulSoup]) -> Tuple[Course, CourseIn
 
             elif i == table_type['NOTES']:
                 log.info("Retrieving course description...")
-                course_info.description = "".join([line for line in cells])
+                course_info.description = "".join([line[0] for line in cells])
             break
     log.info("Done collecting course information and instructor information.")
     return course, course_info, instructor
+
+
+def get_multiline(row):
+    """
+    <table border="1" cellpadding="3"><tbody><tr bgcolor="#d0d0d0"><th colspan="4">Meetings</th></tr>
+    <tr bgcolor="#d0d0d0"><th>Days</th><th>Time</th><th>Location</th><th>Instructor</th></tr>
+    <tr><td nowrap="" valign="top"><tt>MW</tt></td>
+    <td nowrap="" valign="top"><tt>05:45-07:50 PM</tt></td>
+    <td nowrap="" valign="top"><tt>UW1 030</tt></td>
+    <td nowrap=""><tt>ZANDER,CAROL</tt></td>
+    </tr></tbody></table>
+
+    :param row:
+    :return:
+    """
+    soup = BeautifulSoup(row, features="html.parser")
+    tts = soup.find_all('tt')
 
 
 def create_time_schedule_url(quarter: str, year: str, sln: str) -> str:
@@ -212,12 +239,16 @@ def main():
     netid, password = get_parameters((UW_NETID, UW_PASSWORD))
 
     log.info("starting course sln scraper")
-    with open('course_sln.json') as f:
-        lines = f.readlines()
-        for line in lines:
-            course_sln = json.loads(line)
-            log.info(f"processing {course_sln}")
-            get_course(course_sln, netid, password)
+    # get_course({'url': 'https://sdb.admin.uw.edu/timeschd/uwnetid/sln.asp?QTRYR=AUT+2006&SLN=12011',
+    #             'quarter': 'AUT', 'year': '2007'}, netid, password)
+    get_course({'url': 'https://sdb.admin.uw.edu/timeschd/uwnetid/sln.asp?QTRYR=AUT+2007&SLN=18677',
+                'quarter': 'AUT', 'year': '2007'}, netid, password)
+    # with open('course_sln.json') as f:
+    #     lines = f.readlines()
+    #     for line in lines:
+    #         course_sln = json.loads(line)
+    #         log.info(f"processing {course_sln}")
+    #         get_course(course_sln, netid, password)
 
 
 if __name__ == '__main__':
