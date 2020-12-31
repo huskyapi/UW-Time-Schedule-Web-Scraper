@@ -2,12 +2,9 @@ class CourseInfo:
     def __init__(self):
         self.section = ""
         self.description = ""
-        self.room = ""
         self.quarter = ""
         self.year = ""
-        self.meeting_days = ""
-        self.start_time = ""
-        self.end_time = ""
+        self.meetings = []
         self.current_size = ""
         self.max_size = ""
         self.lower_credits = ""
