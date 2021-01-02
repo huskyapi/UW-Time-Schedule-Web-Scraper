@@ -3,7 +3,6 @@ import os
 import logging
 from utils import retry
 from typing import List, Tuple
-import time
 
 import boto3
 from botocore.exceptions import ClientError, NoCredentialsError
@@ -13,7 +12,6 @@ from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
 from bs4 import BeautifulSoup
 from course import Course
-from course_info import CourseInfo
 from instructor import Instructor
 from cache import get_data
 
@@ -65,9 +63,8 @@ def get_parameters(parameter_names: Tuple[str]) -> List[str]:
     return parameters
 
 
-def create_course_objects(tables: List[BeautifulSoup]) -> Tuple[Course, CourseInfo, Instructor]:
+def create_course_objects(tables: List[BeautifulSoup]) -> Tuple[Course, Instructor]:
     course = Course()
-    course_info = CourseInfo()
     instructor = Instructor()
     for i, table in enumerate(tables[:max_tables]):
         for row in table.findAll('tr'):
@@ -78,45 +75,52 @@ def create_course_objects(tables: List[BeautifulSoup]) -> Tuple[Course, CourseIn
 
             if i == table_type['GENERAL_INFO']:
                 log.info("parsing through course info")
-                course_info.sln = cells[0][0] if cells[0] else None
+                course.sln = cells[0][0] if cells[0] else None
                 if cells[1]:
                     course_tokens = cells[1][0].split()
                     course.department = course_tokens[0]
                     course.number = course_tokens[1]
-                course_info.section = cells[2][0] if cells[2] else None
-                course_info.type = cells[3][0] if cells[3] else None
+                course.section = cells[2][0] if cells[2] else None
+                course.type = cells[3][0] if cells[3] else None
 
                 # TODO: Add way to handle fractional credits (i.e, 2.5)
                 if len(cells) > 7:
                     credit_tokens = cells[5][0].strip().split('-') if cells[5] else []
                     if len(credit_tokens) > 1:
-                        course_info.lower_credits = credit_tokens[0]
-                        course_info.upper_credits = credit_tokens[1]
+                        course.lower_credits = credit_tokens[0]
+                        course.upper_credits = credit_tokens[1]
                     else:
-                        course_info.lower_credits = credit_tokens[0]
-                        course_info.upper_credits = credit_tokens[0]
+                        course.lower_credits = credit_tokens[0]
+                        course.upper_credits = credit_tokens[0]
 
                     course.name = cells[6][0]
-                    course_info.gen_ed_marker = cells[7] if cells[7] else None
+                    gen_ed_marker = cells[7]
+
                 else:
                     credit_tokens = cells[4][0].strip().split('-') if cells[4] else []
                     if len(credit_tokens) > 1:
-                        course_info.lower_credits = credit_tokens[0]
-                        course_info.upper_credits = credit_tokens[1]
+                        course.lower_credits = credit_tokens[0]
+                        course.upper_credits = credit_tokens[1]
                     else:
-                        course_info.lower_credits = credit_tokens[0]
-                        course_info.upper_credits = credit_tokens[0]
+                        course.lower_credits = credit_tokens[0]
+                        course.upper_credits = credit_tokens[0]
 
                     course.name = cells[5][0] if cells[5] else None
-                    course_info.gen_ed_marker = cells[6][0] if cells[6] else None
+                    gen_ed_marker = cells[6][0] if cells[6] else None
 
+                log.info(gen_ed_marker)
+                if gen_ed_marker:
+                    gen_eds = gen_ed_marker.split(",")  # QSR,NW --> [QSR, NW]
+                    for gen_end in gen_eds:
+                        if gen_end in course.general_education:
+                            course.general_education[gen_end] = True
             elif i == table_type['ENROLLMENT']:
                 log.info("parsing through course info (enrollment)")
 
-                course_info.current_size = cells[0][0] if cells[0] else None
-                course_info.max_size = cells[1][0] if cells[1] else None
+                course.current_size = cells[0][0] if cells[0] else None
+                course.max_size = cells[1][0] if cells[1] else None
                 if len(cells) > 4 and cells[4][0] == 'Entry Code required':
-                    course_info.add_code_required = True
+                    course.add_code_required = True
 
             elif i == table_type['MEETINGS']:
                 log.info("parsing through meeting times")
@@ -124,6 +128,10 @@ def create_course_objects(tables: List[BeautifulSoup]) -> Tuple[Course, CourseIn
                 # If there is more than one meeting location:
                 # Ex: TTh   08:45-09:45     UW1 121	GUNNERSON,KIM N.
                 #     TTh   09:45-10:50	    UW2 131 GUNNERSON,KIM N.
+                # meeting_days: [TTh, TTh]
+                # start_times: [08:45, 09:45]
+                # end_times: [09:45, 10:50]
+                # rooms: [UW1 121, UW2 131]
                 if cells[0] and cells[0][0] != 'To be arranged':
                     meeting_days = cells[0]
 
@@ -133,7 +141,13 @@ def create_course_objects(tables: List[BeautifulSoup]) -> Tuple[Course, CourseIn
                     rooms = [room.replace('\u00a0', ' ') for room in cells[2]]
 
                     for days, start_time, end_time, room in zip(meeting_days, start_times, end_times, rooms):
-                        room_building, room_number = room.split()
+                        room_tokens = room.split()
+                        if len(room_tokens) == 1:
+                            room_building = room_tokens[0]
+                            room_number = None
+                        else:
+                            room_building, room_number = room_tokens
+
                         new_meeting = {
                             "room_building": room_building,
                             "room_number": room_number,
@@ -141,7 +155,7 @@ def create_course_objects(tables: List[BeautifulSoup]) -> Tuple[Course, CourseIn
                             "start_time": start_time,
                             "end_time": end_time
                         }
-                        course_info.meetings.append(new_meeting)
+                        course.meetings.append(new_meeting)
 
                     instructor_name = cells[3][0] if cells[3] else None
                     log.info(f"instructor name: {instructor_name}")
@@ -171,10 +185,10 @@ def create_course_objects(tables: List[BeautifulSoup]) -> Tuple[Course, CourseIn
                 log.info("Retrieving course description...")
                 log.info(cells)
                 lines = cells[0]
-                course_info.description = "\n".join([line if line else "" for line in lines])
+                course.description = "\n".join([line if line else "" for line in lines])
             break
     log.info("Done collecting course information and instructor information.")
-    return course, course_info, instructor
+    return course, instructor
 
 
 def get_multiline(row):
@@ -218,17 +232,18 @@ def get_course(course_sln, driver):
     tables = [p.find('table') for p in soup.find_all('p')]
 
     # Parse and build structured course objects
-    course, course_info, instructor = create_course_objects(tables)
-    course_info.quarter = course_sln['quarter']
-    course_info.year = course_sln['year']
-    course.course_info = course_info.__dict__
+    course, instructor = create_course_objects(tables)
+    course.quarter = course_sln['quarter']
+    course.year = course_sln['year']
     course.instructor = instructor.__dict__
     print(json.dumps(course.__dict__))
 
 
 def main():
     # Get UW NetID login credentials
-    netid, password = get_parameters((UW_NETID, UW_PASSWORD))
+    # netid, password = get_parameters((UW_NETID, UW_PASSWORD))
+    netid, password = os.environ.get('NETID'), os.environ.get('PASSWORD')
+
     options = Options()
     options.add_argument("--headless")  # Runs Chrome in headless mode.
     options.add_argument('--no-sandbox')  # # Bypass OS security model
@@ -243,7 +258,9 @@ def main():
 
     # Login to the UW Time Schedule
     netid_input = driver.find_element_by_id("weblogin_netid")
+    netid_input.send_keys(netid)
     password_input = driver.find_element_by_id("weblogin_password")
+    password_input.send_keys(password)
     submit_button = driver.find_element_by_id("submit_button")
     submit_button.click()
 
@@ -274,6 +291,24 @@ def main():
     get_course(
         {"sln": "18677", "quarter": "AUT", "year": "2007",
          "url": "https://sdb.admin.uw.edu/timeschd/uwnetid/sln.asp?QTRYR=AUT+2007&SLN=18677"},
+        driver
+    )
+
+    get_course(
+        {"sln": "13266", "quarter": "WIN", "year": "2021",
+         "url": "https://sdb.admin.uw.edu/timeschd/uwnetid/sln.asp?QTRYR=WIN+2021&SLN=13266"},
+        driver
+    )
+
+    get_course(
+        {"sln": "14427", "quarter": "AUT", "year": "2020",
+         "url": " https://sdb.admin.uw.edu/timeschd/uwnetid/sln.asp?QTRYR=AUT+2020&SLN=14437"},
+        driver
+    )
+
+    get_course(
+        {"sln": "21669", "quarter": "WIN", "year": "2021",
+            "url": "https://sdb.admin.uw.edu/timeschd/uwnetid/sln.asp?QTRYR=WIN+2021&SLN=21669"},
         driver
     )
     # with open('course_sln.json') as f:
